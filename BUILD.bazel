@@ -1,0 +1,21 @@
+load("@gazelle//:def.bzl", "gazelle")
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+# gazelle:prefix github.com/minorhacks/rbe_meter
+
+gazelle(
+    name = "gazelle",
+)
+
+go_library(
+    name = "rbe_meter_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/minorhacks/rbe_meter",
+    visibility = ["//visibility:private"],
+)
+
+go_binary(
+    name = "rbe_meter",
+    embed = [":rbe_meter_lib"],
+    visibility = ["//visibility:public"],
+)
