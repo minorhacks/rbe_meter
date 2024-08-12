@@ -1,0 +1,27 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "rbe_meter_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/minorhacks/rbe_meter/cmd/rbe_meter",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//pkg/proto/configuration/rbe_meter:rbe_meter_go_proto",
+        "//pkg/proxying",
+        "@com_github_bazelbuild_remote_apis//build/bazel/remote/execution/v2:execution",
+        "@com_github_buildbarn_bb_storage//pkg/grpc",
+        "@com_github_buildbarn_bb_storage//pkg/program",
+        "@com_github_buildbarn_bb_storage//pkg/proto/configuration/grpc",
+        "@com_github_buildbarn_bb_storage//pkg/util",
+        "@org_golang_google_genproto_googleapis_bytestream//:bytestream",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+    ],
+)
+
+go_binary(
+    name = "rbe_meter",
+    embed = [":rbe_meter_lib"],
+    visibility = ["//visibility:public"],
+)

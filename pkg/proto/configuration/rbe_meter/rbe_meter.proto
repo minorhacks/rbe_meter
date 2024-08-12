@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package minorhacks.configuration.rbe_meter;
+
+import "pkg/proto/configuration/grpc/grpc.proto";
+
+option go_package = "github.com/minorhacks/rbe_meter/pkg/proto/configuration/rbe_meter";
+
+message ApplicationConfiguration {
+  buildbarn.configuration.grpc.ClientConfiguration rbe_backend = 1;
+
+  buildbarn.configuration.grpc.ServerConfiguration grpc_server = 2;
+}

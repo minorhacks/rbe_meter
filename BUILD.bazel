@@ -1,21 +1,11 @@
 load("@gazelle//:def.bzl", "gazelle")
-load("@rules_go//go:def.bzl", "go_binary", "go_library")
 
 # gazelle:prefix github.com/minorhacks/rbe_meter
+# gazelle:go_naming_convention_external import
+# gazelle:exclude pkg/proto/configuration/*/*.go
+# gazelle:resolve proto go pkg/proto/configuration/grpc/grpc.proto @com_github_buildbarn_bb_storage//pkg/proto/configuration/grpc
+# gazelle:resolve proto pkg/proto/configuration/grpc/grpc.proto @com_github_buildbarn_bb_storage//pkg/proto/configuration/grpc:grpc_proto
 
 gazelle(
     name = "gazelle",
-)
-
-go_library(
-    name = "rbe_meter_lib",
-    srcs = ["main.go"],
-    importpath = "github.com/minorhacks/rbe_meter",
-    visibility = ["//visibility:private"],
-)
-
-go_binary(
-    name = "rbe_meter",
-    embed = [":rbe_meter_lib"],
-    visibility = ["//visibility:public"],
 )

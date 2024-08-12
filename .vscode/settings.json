@@ -1,5 +1,35 @@
 {
+  "bazel.queriesShareServer": false,
   "go.toolsEnvVars": {
     "GOPACKAGESDRIVER": "/home/scott/bin/gopackagesdriver_modern.sh"
-  }
+  },
+  "go.goroot": "${workspaceFolder}/bazel-${workspaceFolderBasename}/external/rules_go~~go_sdk~com_github_minorhacks_rbe_meter__download_0",
+  "go.enableCodeLens": {
+    "runtest": false
+  },
+  "gopls": {
+    "build.directoryFilters": [
+      "-bazel-bin",
+      "-bazel-out",
+      "-bazel-testlogs",
+      "-bazel-rbe_meter",
+    ],
+    "formatting.gofumpt": false,
+    "formatting.local": "github.com/minorhacks/rbe_meter",
+    "ui.completion.usePlaceholders": true,
+    "ui.semanticTokens": true,
+    "ui.codelenses": {
+      "gc_details": false,
+      "regenerate_cgo": false,
+      "generate": false,
+      "test": false,
+      "tidy": false,
+      "upgrade_dependency": false,
+      "vendor": false
+    }
+  },
+  "go.useLanguageServer": true,
+  "go.buildOnSave": "off",
+  "go.lintOnSave": "off",
+  "go.vetOnSave": "off",
 }
