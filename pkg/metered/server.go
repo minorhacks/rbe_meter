@@ -3,8 +3,12 @@ package metered
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
+	"strconv"
+	"strings"
+	"time"
 
 	repb "github.com/bazelbuild/remote-apis/build/bazel/remote/execution/v2"
 	"github.com/buildbarn/bb-storage/pkg/util"
@@ -28,6 +32,9 @@ type Server struct {
 	fmbBlobSizeBytes      *prometheus.HistogramVec
 	fmbBatchSizeBlobCount *prometheus.HistogramVec
 	fmbBatchSizeBytes     *prometheus.HistogramVec
+	bsrStartedBytes       *prometheus.CounterVec
+	bsrCompletedBytes     *prometheus.CounterVec
+	bsrBlobReadTput       *prometheus.HistogramVec
 
 	repb.UnimplementedActionCacheServer
 	repb.UnimplementedCapabilitiesServer
@@ -47,24 +54,46 @@ func NewServer(client grpc.ClientConnInterface, reg prometheus.Registerer) *Serv
 
 		fmbBlobSizeBytes: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Namespace: "rbemeter",
-			Name:      "find_missing_blobs_blob_size_bytes",
+			Subsystem: "find_missing_blobs",
+			Name:      "blob_size_bytes",
 			Buckets:   prometheus.ExponentialBuckets(1, 4, 18),
 		}, []string{"inv_id", "result"}),
 		fmbBatchSizeBlobCount: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Namespace: "rbemeter",
-			Name:      "find_missing_blobs_batch_size_blob_count",
+			Subsystem: "find_missing_blobs",
+			Name:      "batch_size_blob_count",
 			Buckets:   prometheus.ExponentialBucketsRange(1, 10000, 18),
 		}, []string{"inv_id", "result"}),
 		fmbBatchSizeBytes: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Namespace: "rbemeter",
-			Name:      "find_missing_blobs_batch_size_bytes",
-			Buckets:   prometheus.ExponentialBuckets(1, 4, 18),
+			Subsystem: "find_missing_blobs",
+			Name:      "batch_size_bytes",
+			Buckets:   prometheus.ExponentialBuckets(1, 2, 14),
 		}, []string{"inv_id", "result"}),
+		bsrStartedBytes: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "rbemeter",
+			Subsystem: "bytestream_read",
+			Name:      "started_bytes",
+		}, []string{"inv_id"}),
+		bsrCompletedBytes: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "rbemeter",
+			Subsystem: "bytestream_read",
+			Name:      "completed_bytes",
+		}, []string{"inv_id", "result"}),
+		bsrBlobReadTput: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: "rbemeter",
+			Subsystem: "bytestream_read",
+			Name:      "blob_tput_bytes_per_second",
+			Buckets:   prometheus.ExponentialBuckets(1024 /* 1 KBps */, 2, 20),
+		}, []string{"inv_id"}),
 	}
 
 	reg.MustRegister(srv.fmbBlobSizeBytes)
 	reg.MustRegister(srv.fmbBatchSizeBlobCount)
 	reg.MustRegister(srv.fmbBatchSizeBytes)
+	reg.MustRegister(srv.bsrStartedBytes)
+	reg.MustRegister(srv.bsrCompletedBytes)
+	reg.MustRegister(srv.bsrBlobReadTput)
 
 	return srv
 }
@@ -83,6 +112,12 @@ func invocationId(ctx context.Context) (string, error) {
 		return "", util.StatusWrapWithCode(err, codes.InvalidArgument, "can't parse header value as repb.RequestMetadata message")
 	}
 	return reqMeta.ToolInvocationId, nil
+}
+
+func byteStreamBlobSize(name string) (uint64, error) {
+	fields := strings.Split(name, "/")
+	sizeStr := fields[len(fields)-1]
+	return strconv.ParseUint(sizeStr, 10, 64)
 }
 
 func (s *Server) GetCapabilities(ctx context.Context, req *repb.GetCapabilitiesRequest) (res *repb.ServerCapabilities, err error) {
@@ -249,12 +284,38 @@ func (s *Server) WaitExecution(req *repb.WaitExecutionRequest, srv repb.Executio
 	}
 }
 
-func (s *Server) Read(req *bpb.ReadRequest, srv bpb.ByteStream_ReadServer) error {
+func (s *Server) Read(req *bpb.ReadRequest, srv bpb.ByteStream_ReadServer) (rpcErr error) {
+	iid, err := invocationId(srv.Context())
+	if err != nil {
+		return err
+	}
+
+	streamStart := time.Now()
+
 	client, err := s.ByteStream.Read(srv.Context(), req)
 	if err != nil {
 		slog.Error("failed to create client", slog.String("method", "ByteStream.Read"), slog.Any("err", err))
 		return util.StatusWrapWithCode(err, codes.FailedPrecondition, "failed to create Read client")
 	}
+
+	size, err := byteStreamBlobSize(req.GetResourceName())
+	if err != nil {
+		return util.StatusWrapWithCode(err, codes.Internal, "failed to parse size from resource name")
+	}
+	remaining := size
+	s.bsrStartedBytes.WithLabelValues(iid).Add(float64(remaining))
+	defer func() {
+		code := codes.OK
+		if rpcErr != nil && !errors.Is(rpcErr, io.EOF) {
+			code = status.Code(rpcErr)
+		} else {
+			// Only record throughputs for successfully-downloaded blobs
+			d := time.Now().Sub(streamStart).Seconds()
+			s.bsrBlobReadTput.WithLabelValues(iid).Observe(float64(size) / d)
+		}
+		s.bsrCompletedBytes.WithLabelValues(iid, code.String())
+	}()
+
 	for {
 		res, err := client.Recv()
 		if err != nil {
@@ -270,6 +331,9 @@ func (s *Server) Read(req *bpb.ReadRequest, srv bpb.ByteStream_ReadServer) error
 			slog.Error("failed to send to client", slog.String("method", "ByteStream.Read"), slog.Any("err", err))
 			return err
 		}
+
+		remaining -= uint64(len(res.Data))
+		s.bsrCompletedBytes.WithLabelValues(iid, codes.OK.String()).Add(float64(len(res.Data)))
 	}
 }
 
