@@ -2,7 +2,10 @@ load("@rules_go//go:def.bzl", "go_library")
 
 go_library(
     name = "metered",
-    srcs = ["server.go"],
+    srcs = [
+        "interceptor.go",
+        "server.go",
+    ],
     importpath = "github.com/minorhacks/rbe_meter/pkg/metered",
     visibility = ["//visibility:public"],
     deps = [

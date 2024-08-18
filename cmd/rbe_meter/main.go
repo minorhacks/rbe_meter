@@ -48,7 +48,13 @@ func (a *meterApp) Run(ctx context.Context, siblings program.Group, deps program
 
 	reg := prometheus.NewRegistry()
 
-	clientFactory := bbgrpc.NewBaseClientFactory(bbgrpc.BaseClientDialer, nil, nil)
+	interceptor := metered.NewInterceptor(reg)
+
+	clientFactory := bbgrpc.NewBaseClientFactory(
+		bbgrpc.BaseClientDialer,
+		[]grpc.UnaryClientInterceptor{interceptor.Intercept},
+		[]grpc.StreamClientInterceptor{interceptor.StreamIntercept},
+	)
 	client, err := clientFactory.NewClientFromConfiguration(config.GetRbeBackend())
 	if err != nil {
 		return util.StatusWrapf(err, "failed to create new client from simple factory")
