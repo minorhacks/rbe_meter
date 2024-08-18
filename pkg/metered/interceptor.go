@@ -15,10 +15,11 @@ import (
 )
 
 type Interceptor struct {
-	grpcCallsStartedCount *prometheus.CounterVec
-	grpcCallDuration *prometheus.HistogramVec
+	grpcCallsStartedCount       *prometheus.CounterVec
+	grpcCallDuration            *prometheus.HistogramVec
 	grpcStreamRxFirstMsgLatency *prometheus.HistogramVec
 	grpcStreamRxInterMsgLatency *prometheus.HistogramVec
+	grpcStreamRxMessageCounts   *prometheus.HistogramVec
 }
 
 func NewInterceptor(reg prometheus.Registerer) *Interceptor {
@@ -26,32 +27,39 @@ func NewInterceptor(reg prometheus.Registerer) *Interceptor {
 		grpcCallsStartedCount: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "rbemeter",
 			Subsystem: "grpc",
-			Name: "calls_started_count",
+			Name:      "calls_started_count",
 		}, []string{"inv_id", "grpc_method"}),
 		grpcCallDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Namespace: "rbemeter",
 			Subsystem: "grpc",
-			Name: "call_duration_seconds",
-			Buckets: prometheus.ExponentialBucketsRange(0.000001, 600, 18),
+			Name:      "call_duration_seconds",
+			Buckets:   prometheus.ExponentialBucketsRange(0.000001, 600, 18),
 		}, []string{"inv_id", "grpc_method", "response_code"}),
 		grpcStreamRxFirstMsgLatency: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Namespace: "rbemeter",
 			Subsystem: "grpc",
-			Name: "stream_rx_first_message_latency_seconds",
-			Buckets: prometheus.ExponentialBucketsRange(0.000001, 10, 18),
+			Name:      "stream_rx_first_message_latency_seconds",
+			Buckets:   prometheus.ExponentialBucketsRange(0.000001, 10, 18),
 		}, []string{"inv_id", "grpc_method"}),
 		grpcStreamRxInterMsgLatency: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Namespace: "rbemeter",
 			Subsystem: "grpc",
-			Name: "stream_rx_inter_message_latency_seconds",
-			Buckets: prometheus.ExponentialBucketsRange(0.000001, 10, 18),
+			Name:      "stream_rx_inter_message_latency_seconds",
+			Buckets:   prometheus.ExponentialBucketsRange(0.000001, 10, 18),
 		}, []string{"inv_id", "grpc_method"}),
+		grpcStreamRxMessageCounts: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: "rbemeter",
+			Subsystem: "grpc",
+			Name:      "stream_rx_message_counts",
+			Buckets:   prometheus.ExponentialBucketsRange(1, 1e6, 18),
+		}, []string{"inv_id", "grpc_method", "response_code"}),
 	}
 
 	reg.MustRegister(i.grpcCallsStartedCount)
 	reg.MustRegister(i.grpcCallDuration)
 	reg.MustRegister(i.grpcStreamRxFirstMsgLatency)
 	reg.MustRegister(i.grpcStreamRxInterMsgLatency)
+	reg.MustRegister(i.grpcStreamRxMessageCounts)
 
 	return i
 }
@@ -64,31 +72,32 @@ func (i *Interceptor) Intercept(
 	cc *grpc.ClientConn,
 	invoker grpc.UnaryInvoker,
 	opts ...grpc.CallOption,
-	) (rpcErr error) {
-		iid, err := invocationId(ctx)
-		if err != nil {
-			return err
-		}
+) (rpcErr error) {
+	iid, err := invocationId(ctx)
+	if err != nil {
+		return err
+	}
 
-		i.grpcCallsStartedCount.WithLabelValues(iid, method).Inc()
+	i.grpcCallsStartedCount.WithLabelValues(iid, method).Inc()
 
-		start := time.Now()
-		defer func() {
-			elapsed := time.Now().Sub(start)
-			code := status.Code(rpcErr).String()
-			i.grpcCallDuration.WithLabelValues(iid, method, code).Observe(elapsed.Seconds())
-		}()
-		return invoker(ctx, method, req, reply, cc, opts...)
+	start := time.Now()
+	defer func() {
+		elapsed := time.Now().Sub(start)
+		code := status.Code(rpcErr).String()
+		i.grpcCallDuration.WithLabelValues(iid, method, code).Observe(elapsed.Seconds())
+	}()
+	return invoker(ctx, method, req, reply, cc, opts...)
 }
 
 type singleStreamMetering struct {
-	iid string
-	method string
-	impl grpc.ClientStream
-	parent *Interceptor
-	ttfbFlag sync.Once
-	streamStart time.Time
-	lastMsgTime time.Time
+	iid            string
+	method         string
+	impl           grpc.ClientStream
+	parent         *Interceptor
+	ttfbFlag       sync.Once
+	streamStart    time.Time
+	streamMsgCount uint64
+	lastMsgTime    time.Time
 }
 
 func (s *singleStreamMetering) SendMsg(msg any) error {
@@ -98,6 +107,7 @@ func (s *singleStreamMetering) SendMsg(msg any) error {
 func (s *singleStreamMetering) RecvMsg(msg any) (rpcErr error) {
 	defer func() {
 		if rpcErr == nil {
+			s.streamMsgCount++
 			return
 		}
 		// Got an error; the stream from the proxied server is ending
@@ -107,10 +117,13 @@ func (s *singleStreamMetering) RecvMsg(msg any) (rpcErr error) {
 			code = status.Code(rpcErr)
 		}
 		s.parent.grpcCallDuration.WithLabelValues(s.iid, s.method, code.String()).Observe(duration.Seconds())
+		s.parent.grpcStreamRxMessageCounts.WithLabelValues(s.iid, s.method, code.String()).Observe(float64(s.streamMsgCount))
 	}()
 
 	current := time.Now()
-	s.ttfbFlag.Do(func() { s.parent.grpcStreamRxFirstMsgLatency.WithLabelValues(s.iid, s.method).Observe(current.Sub(s.streamStart).Seconds()) } )
+	s.ttfbFlag.Do(func() {
+		s.parent.grpcStreamRxFirstMsgLatency.WithLabelValues(s.iid, s.method).Observe(current.Sub(s.streamStart).Seconds())
+	})
 	s.parent.grpcStreamRxInterMsgLatency.WithLabelValues(s.iid, s.method).Observe(current.Sub(s.lastMsgTime).Seconds())
 
 	s.lastMsgTime = current
@@ -141,25 +154,25 @@ func (i *Interceptor) StreamIntercept(
 	method string,
 	streamer grpc.Streamer,
 	opts ...grpc.CallOption) (grpc.ClientStream, error) {
-		iid, err := invocationId(ctx)
-		if err != nil {
-			return nil, err
-		}
-
-		i.grpcCallsStartedCount.WithLabelValues(iid, method).Inc()
-
-		stream, err := streamer(ctx, desc, cc, method, opts...)
-		if err != nil {
-			return nil, err
-		}
-
-		return &singleStreamMetering{
-			iid: iid,
-			method: method,
-			impl: stream,
-			parent: i,
-			ttfbFlag: sync.Once{},
-			streamStart: time.Now(),
-			lastMsgTime: time.Now(),
-		}, nil
+	iid, err := invocationId(ctx)
+	if err != nil {
+		return nil, err
 	}
+
+	i.grpcCallsStartedCount.WithLabelValues(iid, method).Inc()
+
+	stream, err := streamer(ctx, desc, cc, method, opts...)
+	if err != nil {
+		return nil, err
+	}
+
+	return &singleStreamMetering{
+		iid:         iid,
+		method:      method,
+		impl:        stream,
+		parent:      i,
+		ttfbFlag:    sync.Once{},
+		streamStart: time.Now(),
+		lastMsgTime: time.Now(),
+	}, nil
+}

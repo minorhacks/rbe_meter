@@ -10,4 +10,12 @@ message ApplicationConfiguration {
   buildbarn.configuration.grpc.ClientConfiguration rbe_backend = 1;
 
   buildbarn.configuration.grpc.ServerConfiguration grpc_server = 2;
+
+  PushMetricsConfiguration push_metrics = 3;
+}
+
+message PushMetricsConfiguration {
+  string push_url = 1;
+  string job_name = 2;
+  int64 scrape_interval_ms = 3;
 }

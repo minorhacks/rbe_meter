@@ -7,6 +7,7 @@ go_library(
     visibility = ["//visibility:private"],
     deps = [
         "//pkg/metered",
+        "//pkg/metrics",
         "//pkg/proto/configuration/rbe_meter:rbe_meter_go_proto",
         "@com_github_bazelbuild_remote_apis//build/bazel/remote/execution/v2:execution",
         "@com_github_buildbarn_bb_storage//pkg/grpc",
@@ -14,9 +15,6 @@ go_library(
         "@com_github_buildbarn_bb_storage//pkg/proto/configuration/grpc",
         "@com_github_buildbarn_bb_storage//pkg/util",
         "@com_github_prometheus_client_golang//prometheus",
-        "@com_github_prometheus_client_golang//prometheus/collectors",
-        "@com_github_prometheus_client_golang//prometheus/push",
-        "@com_github_prometheus_common//expfmt",
         "@org_golang_google_genproto_googleapis_bytestream//:bytestream",
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//codes",

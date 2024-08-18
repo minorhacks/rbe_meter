@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"time"
 
 	repb "github.com/bazelbuild/remote-apis/build/bazel/remote/execution/v2"
 	bbgrpc "github.com/buildbarn/bb-storage/pkg/grpc"
@@ -13,15 +12,13 @@ import (
 	gpb "github.com/buildbarn/bb-storage/pkg/proto/configuration/grpc"
 	"github.com/buildbarn/bb-storage/pkg/util"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/collectors"
-	"github.com/prometheus/client_golang/prometheus/push"
-	"github.com/prometheus/common/expfmt"
 	bpb "google.golang.org/genproto/googleapis/bytestream"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	"github.com/minorhacks/rbe_meter/pkg/metered"
+	"github.com/minorhacks/rbe_meter/pkg/metrics"
 	mpb "github.com/minorhacks/rbe_meter/pkg/proto/configuration/rbe_meter"
 )
 
@@ -61,27 +58,12 @@ func (a *meterApp) Run(ctx context.Context, siblings program.Group, deps program
 	}
 
 	proxy := metered.NewServer(client, reg)
-	pusher := push.New("http://localhost:8429/api/v1/import/prometheus", "rbe_meter").
-		Collector(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{})).
-		Collector(collectors.NewGoCollector()).
-		Gatherer(reg).
-		Format(expfmt.NewFormat(expfmt.TypeTextPlain))
 
-	go func() {
-		tick := time.NewTicker(33 * time.Millisecond)
-		defer tick.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-
-			case <-tick.C:
-				if err := pusher.PushContext(ctx); err != nil {
-					slog.Error("metrics push failed", slog.Any("err", err))
-				}
-			}
-		}
-	}()
+	pusher, err := metrics.FromConfig(config.PushMetrics, reg)
+	if err != nil {
+		return fmt.Errorf("creating metrics pusher: %w", err)
+	}
+	go pusher.PushLoop(ctx)
 
 	if err := bbgrpc.NewServersFromConfigurationAndServe(
 		[]*gpb.ServerConfiguration{config.GetGrpcServer()},
@@ -90,7 +72,7 @@ func (a *meterApp) Run(ctx context.Context, siblings program.Group, deps program
 	); err != nil {
 		return fmt.Errorf("while starting grpc servers: %w", err)
 	}
-	fmt.Println("rbe_meter")
+	slog.Info("proxying REAPI requests to backend")
 
 	select {
 	case <-ctx.Done():
