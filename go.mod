@@ -7,6 +7,8 @@ toolchain go1.22.5
 require (
 	github.com/bazelbuild/remote-apis v0.0.0-20240703191324-0d21f29acdb9
 	github.com/buildbarn/bb-storage v0.0.0-20240703155715-2dca465d2b51
+	github.com/prometheus/client_golang v1.20.0
+	github.com/prometheus/common v0.55.0
 	google.golang.org/genproto/googleapis/bytestream v0.0.0-20240701130421-f6361c86f094
 	google.golang.org/grpc v1.65.0
 )
@@ -25,9 +27,8 @@ require (
 	github.com/grpc-ecosystem/go-grpc-prometheus v1.2.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.20.0 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
-	github.com/prometheus/client_golang v1.19.1 // indirect
+	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/prometheus/client_model v0.6.1 // indirect
-	github.com/prometheus/common v0.54.0 // indirect
 	github.com/prometheus/procfs v0.15.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.52.0 // indirect
 	go.opentelemetry.io/otel v1.27.0 // indirect
@@ -40,7 +41,7 @@ require (
 	golang.org/x/net v0.26.0 // indirect
 	golang.org/x/oauth2 v0.21.0 // indirect
 	golang.org/x/sync v0.7.0 // indirect
-	golang.org/x/sys v0.21.0 // indirect
+	golang.org/x/sys v0.22.0 // indirect
 	golang.org/x/text v0.16.0 // indirect
 	google.golang.org/genproto v0.0.0-20240617180043-68d350f18fd4 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20240617180043-68d350f18fd4 // indirect

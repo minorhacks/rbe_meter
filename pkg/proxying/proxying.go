@@ -1,3 +1,4 @@
+// Package proxying provides (an) implementation
 package proxying
 
 import (
@@ -7,9 +8,13 @@ import (
 
 	repb "github.com/bazelbuild/remote-apis/build/bazel/remote/execution/v2"
 	"github.com/buildbarn/bb-storage/pkg/util"
+	"github.com/golang/protobuf/proto"
+	"github.com/prometheus/client_golang/prometheus"
 	bpb "google.golang.org/genproto/googleapis/bytestream"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 type Server struct {
@@ -20,11 +25,64 @@ type Server struct {
 	Execution                 repb.ExecutionClient
 	ByteStream                bpb.ByteStreamClient
 
+	fmbBlobSizeBytes      *prometheus.HistogramVec
+	fmbBatchSizeBlobCount *prometheus.HistogramVec
+	fmbBatchSizeBytes     *prometheus.HistogramVec
+
 	repb.UnimplementedActionCacheServer
 	repb.UnimplementedCapabilitiesServer
 	repb.UnimplementedContentAddressableStorageServer
 	repb.UnimplementedExecutionServer
 	bpb.UnimplementedByteStreamServer
+}
+
+func NewServer(client grpc.ClientConnInterface, reg prometheus.Registerer) *Server {
+	srv := &Server{
+		ProxyTarget:               client,
+		ActionCache:               repb.NewActionCacheClient(client),
+		Capabilities:              repb.NewCapabilitiesClient(client),
+		ContentAddressableStorage: repb.NewContentAddressableStorageClient(client),
+		Execution:                 repb.NewExecutionClient(client),
+		ByteStream:                bpb.NewByteStreamClient(client),
+
+		fmbBlobSizeBytes: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: "rbemeter",
+			Name:      "find_missing_blobs_blob_size_bytes",
+			Buckets:   prometheus.ExponentialBuckets(1, 4, 18),
+		}, []string{"inv_id", "result"}),
+		fmbBatchSizeBlobCount: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: "rbemeter",
+			Name:      "find_missing_blobs_batch_size_blob_count",
+			Buckets:   prometheus.ExponentialBucketsRange(1, 10000, 18),
+		}, []string{"inv_id", "result"}),
+		fmbBatchSizeBytes: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: "rbemeter",
+			Name:      "find_missing_blobs_batch_size_bytes",
+			Buckets:   prometheus.ExponentialBuckets(1, 4, 18),
+		}, []string{"inv_id", "result"}),
+	}
+
+	reg.MustRegister(srv.fmbBlobSizeBytes)
+	reg.MustRegister(srv.fmbBatchSizeBlobCount)
+	reg.MustRegister(srv.fmbBatchSizeBytes)
+
+	return srv
+}
+
+func invocationId(ctx context.Context) (string, error) {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return "", status.Errorf(codes.InvalidArgument, "can't get call metadata")
+	}
+	data := []byte(md.Get(`build.bazel.remote.execution.v2.requestmetadata-bin`)[0])
+	if len(data) == 0 {
+		return "", status.Errorf(codes.InvalidArgument, "empty or missing repb.REquestMetadata header")
+	}
+	reqMeta := &repb.RequestMetadata{}
+	if err := proto.Unmarshal(data, reqMeta); err != nil {
+		return "", util.StatusWrapWithCode(err, codes.InvalidArgument, "can't parse header value as repb.RequestMetadata message")
+	}
+	return reqMeta.ToolInvocationId, nil
 }
 
 func (s *Server) GetCapabilities(ctx context.Context, req *repb.GetCapabilitiesRequest) (res *repb.ServerCapabilities, err error) {
@@ -60,7 +118,44 @@ func (s *Server) FindMissingBlobs(ctx context.Context, req *repb.FindMissingBlob
 			slog.Error("FindMissingBlobs error", slog.Any("err", err))
 		}
 	}()
-	return s.ContentAddressableStorage.FindMissingBlobs(ctx, req)
+
+	iid, err := invocationId(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	sizeBytes := int64(0)
+	sizeSet := map[string]int64{}
+	for _, digest := range req.BlobDigests {
+		sizeSet[digest.GetHash()] = digest.GetSizeBytes()
+		sizeBytes += digest.GetSizeBytes()
+		s.fmbBlobSizeBytes.WithLabelValues(iid, "all").Observe(float64(digest.GetSizeBytes()))
+	}
+	s.fmbBatchSizeBlobCount.WithLabelValues(iid, "all").Observe(float64(len(req.BlobDigests)))
+	s.fmbBatchSizeBytes.WithLabelValues(iid, "all").Observe(float64(sizeBytes))
+
+	res, err = s.ContentAddressableStorage.FindMissingBlobs(ctx, req)
+	if err != nil {
+		return res, err
+	}
+
+	sizeHitBytes := int64(0)
+	sizeMissBytes := int64(0)
+	for _, digest := range res.MissingBlobDigests {
+		sizeMissBytes += digest.GetSizeBytes()
+		s.fmbBlobSizeBytes.WithLabelValues(iid, "miss").Observe(float64(digest.GetSizeBytes()))
+		delete(sizeSet, digest.GetHash())
+	}
+	for _, size := range sizeSet {
+		sizeHitBytes += size
+		s.fmbBlobSizeBytes.WithLabelValues(iid, "hit").Observe(float64(size))
+	}
+	s.fmbBatchSizeBlobCount.WithLabelValues(iid, "miss").Observe(float64(len(res.MissingBlobDigests)))
+	s.fmbBatchSizeBytes.WithLabelValues(iid, "miss").Observe(float64(sizeMissBytes))
+	s.fmbBatchSizeBlobCount.WithLabelValues(iid, "hit").Observe(float64(len(sizeSet)))
+	s.fmbBatchSizeBytes.WithLabelValues(iid, "hit").Observe(float64(sizeHitBytes))
+
+	return res, nil
 }
 
 func (s *Server) BatchUpdateBlobs(ctx context.Context, req *repb.BatchUpdateBlobsRequest) (res *repb.BatchUpdateBlobsResponse, err error) {
