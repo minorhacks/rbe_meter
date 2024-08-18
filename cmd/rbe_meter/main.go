@@ -21,8 +21,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/minorhacks/rbe_meter/pkg/metered"
 	mpb "github.com/minorhacks/rbe_meter/pkg/proto/configuration/rbe_meter"
-	"github.com/minorhacks/rbe_meter/pkg/proxying"
 )
 
 type meterApp struct{}
@@ -54,7 +54,7 @@ func (a *meterApp) Run(ctx context.Context, siblings program.Group, deps program
 		return util.StatusWrapf(err, "failed to create new client from simple factory")
 	}
 
-	proxy := proxying.NewServer(client, reg)
+	proxy := metered.NewServer(client, reg)
 	pusher := push.New("http://localhost:8429/api/v1/import/prometheus", "rbe_meter").
 		Collector(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{})).
 		Collector(collectors.NewGoCollector()).

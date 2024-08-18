@@ -1,5 +1,5 @@
-// Package proxying provides (an) implementation
-package proxying
+// Package metered provides (an) implementation
+package metered
 
 import (
 	"context"

@@ -6,8 +6,8 @@ go_library(
     importpath = "github.com/minorhacks/rbe_meter/cmd/rbe_meter",
     visibility = ["//visibility:private"],
     deps = [
+        "//pkg/metered",
         "//pkg/proto/configuration/rbe_meter:rbe_meter_go_proto",
-        "//pkg/proxying",
         "@com_github_bazelbuild_remote_apis//build/bazel/remote/execution/v2:execution",
         "@com_github_buildbarn_bb_storage//pkg/grpc",
         "@com_github_buildbarn_bb_storage//pkg/program",
